@@ -1,0 +1,158 @@
+# Docker Compose for CPU-only deployment
+# Usage: docker-compose -f docker-compose.cpu.yml up -d
+
+version: '3.8'
+
+services:
+  # Backend API (CPU)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.cpu
+    container_name: zonos-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+      - db_data:/app/data
+    environment:
+      - ENV=production
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DEVICE=cpu
+      - ZONOS_MODEL=Zyphra/Zonos-v0.1-transformer
+      - DATABASE_URL=sqlite+aiosqlite:///./data/zonos_tts.db
+      - REDIS_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MAX_CONCURRENT_TTS=1
+      - MAX_CONCURRENT_EMBEDDING=1
+      - MAX_QUEUE_SIZE=5
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/system/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Redis (캐싱)
+  redis:
+    image: redis:7-alpine
+    container_name: zonos-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Celery Worker (CPU)
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.cpu
+    container_name: zonos-celery-worker
+    command: ["celery-worker"]
+    volumes:
+      - ./uploads:/app/uploads
+      - db_data:/app/data
+    environment:
+      - DEVICE=cpu
+      - ZONOS_MODEL=Zyphra/Zonos-v0.1-transformer
+      - REDIS_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATABASE_URL=sqlite+aiosqlite:///./data/zonos_tts.db
+      - CELERY_WORKER_CONCURRENCY=1
+    depends_on:
+      - redis
+      - backend
+    restart: unless-stopped
+
+  # Celery Beat
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.cpu
+    container_name: zonos-celery-beat
+    command: ["celery-beat"]
+    volumes:
+      - db_data:/app/data
+    environment:
+      - REDIS_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATABASE_URL=sqlite+aiosqlite:///./data/zonos_tts.db
+    depends_on:
+      - redis
+      - backend
+    restart: unless-stopped
+
+  # Flower (Celery 모니터링)
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.cpu
+    container_name: zonos-flower
+    command: ["flower"]
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+      - celery-worker
+    restart: unless-stopped
+
+  # Prometheus (선택사항)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: zonos-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+    depends_on:
+      - backend
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Grafana (선택사항)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: zonos-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/zonos-tts.json
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+volumes:
+  db_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

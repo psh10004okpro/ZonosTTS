@@ -10,17 +10,21 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
       - ./uploads:/app/uploads
-      - ./zonos_tts.db:/app/zonos_tts.db
+      - db_data:/app/data
     environment:
+      - ENV=production
       - HOST=0.0.0.0
       - PORT=8000
       - DEVICE=cuda  # 또는 cpu
       - ZONOS_MODEL=Zyphra/Zonos-v0.1-transformer
+      - DATABASE_URL=sqlite+aiosqlite:///./data/zonos_tts.db
       - REDIS_ENABLED=true
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - MAX_CONCURRENT_TTS=2
+      - MAX_CONCURRENT_EMBEDDING=1
+      - MAX_QUEUE_SIZE=10
     depends_on:
       - redis
     deploy:
@@ -31,6 +35,12 @@ services:
               count: 1
               capabilities: [gpu]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/system/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # Frontend
   frontend:
@@ -102,18 +112,18 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: zonos-celery-worker
-    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    command: ["celery-worker"]
     volumes:
-      - ./backend:/app
       - ./uploads:/app/uploads
-      - ./zonos_tts.db:/app/zonos_tts.db
+      - db_data:/app/data
     environment:
       - DEVICE=cuda  # 또는 cpu
       - ZONOS_MODEL=Zyphra/Zonos-v0.1-transformer
       - REDIS_ENABLED=true
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - DATABASE_URL=sqlite+aiosqlite:///./zonos_tts.db
+      - DATABASE_URL=sqlite+aiosqlite:///./data/zonos_tts.db
+      - CELERY_WORKER_CONCURRENCY=2
     depends_on:
       - redis
       - backend
@@ -132,15 +142,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: zonos-celery-beat
-    command: celery -A celery_app beat --loglevel=info
+    command: ["celery-beat"]
     volumes:
-      - ./backend:/app
-      - ./zonos_tts.db:/app/zonos_tts.db
+      - db_data:/app/data
     environment:
       - REDIS_ENABLED=true
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - DATABASE_URL=sqlite+aiosqlite:///./zonos_tts.db
+      - DATABASE_URL=sqlite+aiosqlite:///./data/zonos_tts.db
     depends_on:
       - redis
       - backend
@@ -152,11 +161,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: zonos-flower
-    command: celery -A celery_app flower --port=5555
+    command: ["flower"]
     ports:
       - "5555:5555"
-    volumes:
-      - ./backend:/app
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
