@@ -53,6 +53,38 @@ class Speaker(Base):
     audio_files = relationship("AudioFile", back_populates="speaker")
 
 
+class Job(Base):
+    """비동기 작업 추적 테이블"""
+    __tablename__ = "jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(String, unique=True, nullable=False, index=True)  # Celery task ID
+    job_type = Column(String, nullable=False)  # "tts", "embedding"
+    status = Column(String, default="pending")  # pending, processing, completed, failed
+    progress = Column(Integer, default=0)  # 0-100
+
+    # 요청 파라미터 (JSON)
+    request_params = Column(Text)  # JSON string
+
+    # 결과
+    result_audio_id = Column(Integer, ForeignKey("audio_files.id"), nullable=True)
+    result_speaker_id = Column(Integer, ForeignKey("speakers.id"), nullable=True)
+    result_data = Column(Text, nullable=True)  # JSON string for additional data
+
+    # 에러 정보
+    error_message = Column(Text, nullable=True)
+    error_type = Column(String, nullable=True)
+
+    # 시간 정보
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    # 관계
+    result_audio = relationship("AudioFile", foreign_keys=[result_audio_id])
+    result_speaker = relationship("Speaker", foreign_keys=[result_speaker_id])
+
+
 # ==================== Pydantic 스키마 ====================
 
 class SpeakerBase(BaseModel):
@@ -141,6 +173,52 @@ class DashboardStats(BaseModel):
     total_speakers: int
     total_duration_seconds: float
     total_storage_mb: float
+
+
+class JobCreate(BaseModel):
+    """작업 생성 요청"""
+    job_type: str  # "tts", "embedding"
+    request_params: dict
+
+
+class JobResponse(BaseModel):
+    """작업 상태 응답"""
+    id: int
+    job_id: str
+    job_type: str
+    status: str  # pending, processing, completed, failed
+    progress: int  # 0-100
+    request_params: Optional[dict] = None
+    result_data: Optional[dict] = None
+    error_message: Optional[str] = None
+    error_type: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    result_audio_id: Optional[int] = None
+    result_speaker_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AsyncTTSRequest(BaseModel):
+    """비동기 TTS 생성 요청"""
+    text: str = Field(..., max_length=5000)
+    speaker_id: Optional[int] = None
+    language: str = "en-us"
+    speaking_rate: float = Field(default=1.0, ge=0.5, le=2.0)
+    pitch_shift: float = Field(default=0.0, ge=-12.0, le=12.0)
+    emotion: str = "neutral"
+    priority: int = Field(default=5, ge=1, le=10, description="작업 우선순위 (1-10)")
+
+
+class AsyncTTSResponse(BaseModel):
+    """비동기 TTS 생성 응답"""
+    job_id: str
+    status: str
+    message: str
+    estimated_time_seconds: Optional[int] = None
 
 
 # ==================== 데이터베이스 설정 ====================

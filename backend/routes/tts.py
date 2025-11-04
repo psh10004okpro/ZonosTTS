@@ -12,7 +12,10 @@ from models.database import (
     TTSStreamRequest,
     TTSGenerateRequest,
     AudioFileResponse,
-    DashboardStats
+    DashboardStats,
+    AsyncTTSRequest,
+    AsyncTTSResponse,
+    Job
 )
 from services.tts_service import TTSService
 from services.stream_service import StreamService
@@ -134,6 +137,93 @@ async def generate_audio(
     except Exception as e:
         logger.error(f"파일 생성 실패: {e}")
         raise HTTPException(status_code=500, detail=f"파일 생성 실패: {str(e)}")
+
+
+@router.post("/generate-async", response_model=AsyncTTSResponse)
+async def generate_audio_async(
+    request: AsyncTTSRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    비동기 음성 파일 생성
+    백그라운드에서 음성을 생성하고 job_id를 반환
+
+    **요청 본문:**
+    - text: 생성할 텍스트 (최대 5000자)
+    - speaker_id: 화자 ID (선택)
+    - language: 언어
+    - speaking_rate: 말하기 속도
+    - pitch_shift: 피치 조절
+    - emotion: 감정
+    - priority: 작업 우선순위 (1-10, 기본 5)
+
+    **응답:**
+    - job_id: 작업 ID (상태 조회에 사용)
+    - status: 초기 상태 ("pending")
+    - message: 안내 메시지
+    - estimated_time_seconds: 예상 처리 시간 (초)
+
+    **사용 예:**
+    1. 이 엔드포인트로 작업 시작 → job_id 받기
+    2. GET /api/jobs/{job_id} 로 상태 폴링
+    3. status="completed" 되면 GET /api/jobs/{job_id}/result 로 결과 받기
+    """
+    try:
+        import json
+        from tasks.tts_tasks import generate_tts_async
+
+        logger.info(f"비동기 파일 생성 요청: 텍스트 길이={len(request.text)}, 화자={request.speaker_id}")
+
+        # 예상 처리 시간 계산 (대략적)
+        # 텍스트 100자당 약 10초 소요 (대략)
+        estimated_time = max(10, len(request.text) // 10)
+
+        # Celery 작업 시작
+        task = generate_tts_async.apply_async(
+            kwargs={
+                "job_id": None,  # 나중에 설정
+                "text": request.text,
+                "speaker_id": request.speaker_id,
+                "language": request.language,
+                "speaking_rate": request.speaking_rate,
+                "pitch_shift": request.pitch_shift,
+                "emotion": request.emotion
+            },
+            priority=request.priority
+        )
+
+        job_id = task.id
+
+        # DB에 작업 기록
+        job = Job(
+            job_id=job_id,
+            job_type="tts",
+            status="pending",
+            progress=0,
+            request_params=json.dumps({
+                "text": request.text,
+                "speaker_id": request.speaker_id,
+                "language": request.language,
+                "speaking_rate": request.speaking_rate,
+                "pitch_shift": request.pitch_shift,
+                "emotion": request.emotion
+            })
+        )
+        db.add(job)
+        await db.commit()
+
+        logger.info(f"비동기 작업 시작: job_id={job_id}")
+
+        return AsyncTTSResponse(
+            job_id=job_id,
+            status="pending",
+            message="작업이 대기열에 추가되었습니다. job_id로 상태를 확인하세요.",
+            estimated_time_seconds=estimated_time
+        )
+
+    except Exception as e:
+        logger.error(f"비동기 파일 생성 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"비동기 작업 시작 실패: {str(e)}")
 
 
 @router.get("/stats", response_model=DashboardStats)

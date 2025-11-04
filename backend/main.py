@@ -12,7 +12,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from loguru import logger
 
 from models.database import db_instance
-from routes import tts, speakers, audio, system
+from routes import tts, speakers, audio, system, jobs
 from utils.exceptions import ZonosTTSException, get_http_status_code, format_error_response
 from utils.redis_client import get_redis_manager
 from utils.metrics import get_metrics_collector
@@ -122,6 +122,7 @@ app.include_router(tts.router)
 app.include_router(speakers.router)
 app.include_router(audio.router)
 app.include_router(system.router)
+app.include_router(jobs.router)
 
 
 # ==================== 전역 예외 핸들러 ====================

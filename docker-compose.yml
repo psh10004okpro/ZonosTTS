@@ -96,6 +96,75 @@ services:
       - prometheus
     restart: unless-stopped
 
+  # Celery Worker (비동기 작업 처리)
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: zonos-celery-worker
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    volumes:
+      - ./backend:/app
+      - ./uploads:/app/uploads
+      - ./zonos_tts.db:/app/zonos_tts.db
+    environment:
+      - DEVICE=cuda  # 또는 cpu
+      - ZONOS_MODEL=Zyphra/Zonos-v0.1-transformer
+      - REDIS_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATABASE_URL=sqlite+aiosqlite:///./zonos_tts.db
+    depends_on:
+      - redis
+      - backend
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # Celery Beat (주기적 작업 스케줄러)
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: zonos-celery-beat
+    command: celery -A celery_app beat --loglevel=info
+    volumes:
+      - ./backend:/app
+      - ./zonos_tts.db:/app/zonos_tts.db
+    environment:
+      - REDIS_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DATABASE_URL=sqlite+aiosqlite:///./zonos_tts.db
+    depends_on:
+      - redis
+      - backend
+    restart: unless-stopped
+
+  # Flower (Celery 모니터링 웹 UI)
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: zonos-flower
+    command: celery -A celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./backend:/app
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+      - celery-worker
+    restart: unless-stopped
+
 volumes:
   uploads:
   db_data:
