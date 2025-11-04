@@ -5,6 +5,7 @@
 from fastapi import APIRouter
 from utils.concurrency import get_concurrency_manager
 from utils.cache_service import get_cache_service
+from utils.query_monitor import get_query_monitor
 
 router = APIRouter(prefix="/api/system", tags=["System"])
 
@@ -135,4 +136,44 @@ async def clear_cache_pattern(pattern: str):
         "success": True,
         "message": f"{deleted_count}개 키가 삭제되었습니다.",
         "deleted_count": deleted_count
+    }
+
+
+@router.get("/query-stats", summary="쿼리 성능 통계")
+async def get_query_stats():
+    """
+    데이터베이스 쿼리 성능 통계 조회
+
+    Returns:
+        - total_queries: 총 쿼리 수
+        - slow_queries: 느린 쿼리 수 (1초 이상)
+        - slow_query_percentage: 느린 쿼리 비율
+        - average_duration_ms: 평균 쿼리 실행 시간 (밀리초)
+        - total_duration_seconds: 총 쿼리 실행 시간 (초)
+        - slowest_query: 가장 느린 쿼리 이름
+        - slowest_duration_seconds: 가장 느린 쿼리 실행 시간 (초)
+    """
+    monitor = get_query_monitor()
+    stats = monitor.get_stats()
+
+    return {
+        "success": True,
+        "data": stats
+    }
+
+
+@router.post("/query-stats/reset", summary="쿼리 통계 초기화")
+async def reset_query_stats():
+    """
+    쿼리 통계 초기화
+
+    Returns:
+        성공 여부
+    """
+    monitor = get_query_monitor()
+    monitor.reset_stats()
+
+    return {
+        "success": True,
+        "message": "쿼리 통계가 초기화되었습니다."
     }

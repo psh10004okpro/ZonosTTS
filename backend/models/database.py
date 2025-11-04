@@ -5,7 +5,7 @@ SQLAlchemy를 사용한 ORM 모델 및 Pydantic 스키마
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker, relationship
@@ -23,17 +23,23 @@ class AudioFile(Base):
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, nullable=False)
     text = Column(Text, nullable=False)
-    speaker_id = Column(Integer, ForeignKey("speakers.id"), nullable=True)
-    language = Column(String, default="en-us")
+    speaker_id = Column(Integer, ForeignKey("speakers.id"), nullable=True, index=True)
+    language = Column(String, default="en-us", index=True)
     speaking_rate = Column(Float, default=1.0)
     pitch_shift = Column(Float, default=0.0)
     emotion = Column(String, default="neutral")
     duration = Column(Float)  # 재생 시간 (초)
     file_size = Column(Integer)  # 파일 크기 (바이트)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     # Relationship
     speaker = relationship("Speaker", back_populates="audio_files")
+
+    # Indexes
+    __table_args__ = (
+        Index('ix_audio_files_speaker_created', 'speaker_id', 'created_at'),
+        Index('ix_audio_files_language_created', 'language', 'created_at'),
+    )
 
 
 class Speaker(Base):
@@ -41,16 +47,21 @@ class Speaker(Base):
     __tablename__ = "speakers"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False, unique=True)
+    name = Column(String, nullable=False, unique=True, index=True)
     sample_path = Column(String, nullable=False)  # 원본 오디오 샘플 경로
     embedding_path = Column(String)  # 임베딩 파일 경로 (.pt 파일)
-    language = Column(String, default="en-us")
+    language = Column(String, default="en-us", index=True)
     duration = Column(Float)  # 샘플 재생 시간
-    usage_count = Column(Integer, default=0)  # 사용 횟수
-    created_at = Column(DateTime, default=datetime.utcnow)
+    usage_count = Column(Integer, default=0, index=True)  # 사용 횟수 (정렬용)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     # Relationship
     audio_files = relationship("AudioFile", back_populates="speaker")
+
+    # Indexes
+    __table_args__ = (
+        Index('ix_speakers_language_usage', 'language', 'usage_count'),
+    )
 
 
 class Job(Base):
@@ -59,30 +70,37 @@ class Job(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     job_id = Column(String, unique=True, nullable=False, index=True)  # Celery task ID
-    job_type = Column(String, nullable=False)  # "tts", "embedding"
-    status = Column(String, default="pending")  # pending, processing, completed, failed
+    job_type = Column(String, nullable=False, index=True)  # "tts", "embedding"
+    status = Column(String, default="pending", index=True)  # pending, processing, completed, failed
     progress = Column(Integer, default=0)  # 0-100
 
     # 요청 파라미터 (JSON)
     request_params = Column(Text)  # JSON string
 
     # 결과
-    result_audio_id = Column(Integer, ForeignKey("audio_files.id"), nullable=True)
-    result_speaker_id = Column(Integer, ForeignKey("speakers.id"), nullable=True)
+    result_audio_id = Column(Integer, ForeignKey("audio_files.id"), nullable=True, index=True)
+    result_speaker_id = Column(Integer, ForeignKey("speakers.id"), nullable=True, index=True)
     result_data = Column(Text, nullable=True)  # JSON string for additional data
 
     # 에러 정보
     error_message = Column(Text, nullable=True)
-    error_type = Column(String, nullable=True)
+    error_type = Column(String, nullable=True, index=True)
 
     # 시간 정보
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True, index=True)
 
     # 관계
     result_audio = relationship("AudioFile", foreign_keys=[result_audio_id])
     result_speaker = relationship("Speaker", foreign_keys=[result_speaker_id])
+
+    # Indexes (복합 인덱스)
+    __table_args__ = (
+        Index('ix_jobs_status_created', 'status', 'created_at'),
+        Index('ix_jobs_type_status', 'job_type', 'status'),
+        Index('ix_jobs_status_completed', 'status', 'completed_at'),
+    )
 
 
 # ==================== Pydantic 스키마 ====================
@@ -224,14 +242,24 @@ class AsyncTTSResponse(BaseModel):
 # ==================== 데이터베이스 설정 ====================
 
 class Database:
-    """데이터베이스 연결 및 세션 관리"""
+    """데이터베이스 연결 및 세션 관리 (최적화된 연결 풀링)"""
 
     def __init__(self, database_url: str = "sqlite+aiosqlite:///./zonos_tts.db"):
         self.database_url = database_url
         self.engine = create_async_engine(
             database_url,
             echo=False,
-            future=True
+            future=True,
+            # 연결 풀 설정 (SQLite는 단일 writer이므로 적절히 제한)
+            pool_size=20,  # 연결 풀 크기
+            max_overflow=10,  # 풀 초과 시 추가 연결 수
+            pool_pre_ping=True,  # 연결 유효성 검사
+            pool_recycle=3600,  # 1시간마다 연결 재활용
+            # 쿼리 실행 설정
+            connect_args={
+                "timeout": 30,  # SQLite 락 대기 시간 (초)
+                "check_same_thread": False,
+            }
         )
         self.async_session = sessionmaker(
             self.engine,

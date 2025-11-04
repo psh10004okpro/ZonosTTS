@@ -6,6 +6,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from loguru import logger
 
 from models.database import Job, JobResponse, AudioFileResponse, get_db
@@ -81,8 +82,14 @@ async def get_job_result(
         작업 결과 (완료 시) 또는 상태 정보
     """
     try:
+        # Eager loading으로 N+1 쿼리 방지
         result = await db.execute(
-            select(Job).where(Job.job_id == job_id)
+            select(Job)
+            .options(
+                selectinload(Job.result_audio),
+                selectinload(Job.result_speaker)
+            )
+            .where(Job.job_id == job_id)
         )
         job = result.scalar_one_or_none()
 
@@ -115,15 +122,9 @@ async def get_job_result(
             "result": result_data
         }
 
-        # TTS 작업인 경우 오디오 파일 정보 추가
-        if job.job_type == "tts" and job.result_audio_id:
-            from models.database import AudioFile
-            audio_result = await db.execute(
-                select(AudioFile).where(AudioFile.id == job.result_audio_id)
-            )
-            audio = audio_result.scalar_one_or_none()
-            if audio:
-                response["audio"] = AudioFileResponse.from_orm(audio).dict()
+        # TTS 작업인 경우 오디오 파일 정보 추가 (이미 eager load됨)
+        if job.job_type == "tts" and job.result_audio:
+            response["audio"] = AudioFileResponse.from_orm(job.result_audio).dict()
 
         return response
 
@@ -155,8 +156,11 @@ async def list_jobs(
         작업 목록
     """
     try:
-        # 기본 쿼리
-        query = select(Job).order_by(Job.created_at.desc())
+        # 기본 쿼리 (eager loading으로 N+1 쿼리 방지)
+        query = select(Job).options(
+            selectinload(Job.result_audio),
+            selectinload(Job.result_speaker)
+        ).order_by(Job.created_at.desc())
 
         # 필터 적용
         if status:

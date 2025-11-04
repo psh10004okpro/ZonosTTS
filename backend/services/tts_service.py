@@ -10,10 +10,12 @@ from pathlib import Path
 from typing import Optional, Tuple
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from models.database import AudioFile, Speaker
 from models.zonos_model import ZonosModelWrapper, get_zonos_model
 from utils.concurrency import get_concurrency_manager
+from utils.cache_service import get_cache_service
 from loguru import logger
 
 
@@ -130,9 +132,11 @@ class TTSService:
                 raise
 
     async def get_audio_file(self, db: AsyncSession, audio_id: int) -> Optional[AudioFile]:
-        """오디오 파일 정보 조회"""
+        """오디오 파일 정보 조회 (Speaker eager loading)"""
         result = await db.execute(
-            select(AudioFile).where(AudioFile.id == audio_id)
+            select(AudioFile)
+            .options(selectinload(AudioFile.speaker))
+            .where(AudioFile.id == audio_id)
         )
         return result.scalar_one_or_none()
 
@@ -143,9 +147,9 @@ class TTSService:
         page_size: int = 20,
         search: Optional[str] = None
     ) -> Tuple[list[AudioFile], int]:
-        """오디오 파일 목록 조회 (페이지네이션)"""
-        # 기본 쿼리
-        query = select(AudioFile).order_by(AudioFile.created_at.desc())
+        """오디오 파일 목록 조회 (페이지네이션, eager loading)"""
+        # 기본 쿼리 (Speaker eager loading으로 N+1 쿼리 방지)
+        query = select(AudioFile).options(selectinload(AudioFile.speaker)).order_by(AudioFile.created_at.desc())
 
         # 검색 조건
         if search:
@@ -193,7 +197,18 @@ class TTSService:
             return False
 
     async def get_dashboard_stats(self, db: AsyncSession) -> dict:
-        """대시보드 통계 조회"""
+        """대시보드 통계 조회 (캐싱 적용)"""
+        # 캐시 확인
+        cache = get_cache_service()
+        cache_key = "zonos_tts:dashboard_stats"
+        cached_stats = await cache.get(cache_key)
+
+        if cached_stats:
+            logger.debug("대시보드 통계 캐시 히트")
+            return cached_stats
+
+        logger.debug("대시보드 통계 캐시 미스 - DB 조회")
+
         # 총 오디오 파일 수
         total_audio_result = await db.execute(
             select(func.count()).select_from(AudioFile)
@@ -218,12 +233,17 @@ class TTSService:
         )
         total_size = size_result.scalar() or 0
 
-        return {
+        stats = {
             "total_audio_files": total_audio,
             "total_speakers": total_speaker,
             "total_duration_seconds": round(total_duration, 2),
             "total_storage_mb": round(total_size / (1024 * 1024), 2)
         }
+
+        # 캐시에 저장 (5분 TTL)
+        await cache.set(cache_key, stats, ttl=300)
+
+        return stats
 
     async def _load_speaker_embedding(
         self,
