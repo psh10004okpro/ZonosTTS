@@ -1,0 +1,35 @@
+# FastAPI 및 웹 서버
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Zonos TTS 모델 (GitHub에서 설치: pip install git+https://github.com/Zyphra/Zonos.git)
+# zonos
+
+# PyTorch 및 오디오 처리
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# 데이터베이스
+sqlalchemy==2.0.25
+aiosqlite==0.19.0
+
+# 유틸리티
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# CORS
+fastapi-cors==0.0.6
+
+# 파일 처리
+aiofiles==23.2.1
+python-magic==0.4.27
+
+# 날짜/시간
+python-dateutil==2.8.2
+
+# 로깅
+loguru==0.7.2
