@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from models.database import db_instance
-from routes import tts, speakers, audio
+from routes import tts, speakers, audio, system
 
 
 # ==================== 애플리케이션 생명주기 ====================
@@ -100,6 +100,7 @@ app.add_middleware(
 app.include_router(tts.router)
 app.include_router(speakers.router)
 app.include_router(audio.router)
+app.include_router(system.router)
 
 
 # ==================== 정적 파일 서빙 ====================

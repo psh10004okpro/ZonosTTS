@@ -6,12 +6,14 @@ Server-Sent Events (SSE)를 사용한 실시간 오디오 스트리밍
 import asyncio
 import base64
 import io
+import time
 from typing import Optional, AsyncGenerator
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.zonos_model import get_zonos_model
 from services.speaker_service import SpeakerService
+from utils.concurrency import get_concurrency_manager
 from loguru import logger
 
 
@@ -48,48 +50,54 @@ class StreamService:
         Yields:
             SSE 형식의 바이트 데이터
         """
-        try:
-            # Zonos 모델 가져오기
-            model = get_zonos_model()
+        # 동시성 관리자
+        concurrency = get_concurrency_manager()
+        request_id = f"stream_{int(time.time() * 1000)}"
 
-            # 화자 임베딩 로드
-            speaker_embedding = None
-            if speaker_id:
-                speaker = await self.speaker_service.get_speaker(db, speaker_id)
-                if speaker and speaker.embedding_path:
-                    speaker_embedding = model.load_speaker_embedding(speaker.embedding_path)
+        # 스트리밍도 TTS 세마포어 사용 (동일한 GPU 리소스)
+        async with concurrency.acquire_tts(request_id):
+            try:
+                # Zonos 모델 가져오기
+                model = get_zonos_model()
 
-            logger.info(f"스트리밍 시작: 텍스트={text[:50]}..., 화자={speaker_id}")
+                # 화자 임베딩 로드
+                speaker_embedding = None
+                if speaker_id:
+                    speaker = await self.speaker_service.get_speaker(db, speaker_id)
+                    if speaker and speaker.embedding_path:
+                        speaker_embedding = model.load_speaker_embedding(speaker.embedding_path)
 
-            # 스트리밍 생성
-            async for audio_chunk, sample_rate in self._generate_streaming(
-                model=model,
-                text=text,
-                speaker=speaker_embedding,
-                language=language,
-                speaking_rate=speaking_rate,
-                pitch_shift=pitch_shift,
-                emotion=emotion,
-                chunk_size=chunk_size
-            ):
-                # 오디오를 base64로 인코딩
-                encoded_audio = self._encode_audio_chunk(audio_chunk, sample_rate)
+                logger.info(f"[{request_id}] 스트리밍 시작: 텍스트={text[:50]}..., 화자={speaker_id}")
 
-                # SSE 형식으로 전송
-                event_data = f"data: {encoded_audio}\n\n"
-                yield event_data.encode('utf-8')
+                # 스트리밍 생성
+                async for audio_chunk, sample_rate in self._generate_streaming(
+                    model=model,
+                    text=text,
+                    speaker=speaker_embedding,
+                    language=language,
+                    speaking_rate=speaking_rate,
+                    pitch_shift=pitch_shift,
+                    emotion=emotion,
+                    chunk_size=chunk_size
+                ):
+                    # 오디오를 base64로 인코딩
+                    encoded_audio = self._encode_audio_chunk(audio_chunk, sample_rate)
 
-                # 백프레셔 방지를 위한 작은 딜레이
-                await asyncio.sleep(0.01)
+                    # SSE 형식으로 전송
+                    event_data = f"data: {encoded_audio}\n\n"
+                    yield event_data.encode('utf-8')
 
-            # 스트림 종료 신호
-            yield b"data: [DONE]\n\n"
-            logger.info("✓ 스트리밍 완료")
+                    # 백프레셔 방지를 위한 작은 딜레이
+                    await asyncio.sleep(0.01)
 
-        except Exception as e:
-            logger.error(f"스트리밍 실패: {e}")
-            error_msg = f"data: {{\"error\": \"{str(e)}\"}}\n\n"
-            yield error_msg.encode('utf-8')
+                # 스트림 종료 신호
+                yield b"data: [DONE]\n\n"
+                logger.info(f"[{request_id}] ✓ 스트리밍 완료")
+
+            except Exception as e:
+                logger.error(f"[{request_id}] 스트리밍 실패: {e}")
+                error_msg = f"data: {{\"error\": \"{str(e)}\"}}\n\n"
+                yield error_msg.encode('utf-8')
 
     async def _generate_streaming(
         self,

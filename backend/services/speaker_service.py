@@ -15,6 +15,7 @@ from fastapi import UploadFile, HTTPException
 from models.database import Speaker
 from models.zonos_model import ZonosModelWrapper, get_zonos_model
 from utils.file_validator import FileValidator, validate_audio_file
+from utils.concurrency import get_concurrency_manager
 from config import SPEAKER_UPLOAD_DIR, EMBEDDING_DIR
 from loguru import logger
 
@@ -93,21 +94,26 @@ class SpeakerService:
             self.file_validator.validate_audio_duration(duration)
             logger.info(f"오디오 길이 검증 완료: {duration:.1f}초")
 
-            # ============ 5. 화자 임베딩 생성 ============
+            # ============ 5. 화자 임베딩 생성 (동시성 제어) ============
             embedding_filename = f"embedding_{safe_filename.split('_')[1]}.pt"
             embedding_path = self.embedding_dir / embedding_filename
 
-            logger.info(f"화자 임베딩 생성 중: {name}")
-            speaker_embedding = model.create_speaker_embedding(
-                str(sample_path),
-                str(embedding_path)
-            )
+            # 임베딩 생성은 GPU 집약적이므로 별도 세마포어 사용
+            concurrency = get_concurrency_manager()
+            request_id = f"emb_{name}_{uuid.uuid4().hex[:6]}"
 
-            if speaker_embedding is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="화자 임베딩 생성에 실패했습니다. 오디오 품질을 확인해주세요."
+            async with concurrency.acquire_embedding(request_id):
+                logger.info(f"[{request_id}] 화자 임베딩 생성 중: {name}")
+                speaker_embedding = model.create_speaker_embedding(
+                    str(sample_path),
+                    str(embedding_path)
                 )
+
+                if speaker_embedding is None:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="화자 임베딩 생성에 실패했습니다. 오디오 품질을 확인해주세요."
+                    )
 
             # ============ 6. DB에 저장 ============
             speaker = Speaker(

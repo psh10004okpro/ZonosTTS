@@ -74,6 +74,13 @@ MAX_PITCH_SHIFT = 12.0
 STREAMING_CHUNK_SIZE = 100  # 문자 수
 STREAMING_SAMPLE_RATE = 44100
 
+# ==================== 동시성 제어 설정 ====================
+# GPU 메모리 부족 방지를 위한 동시 실행 제한
+MAX_CONCURRENT_TTS = int(os.getenv("MAX_CONCURRENT_TTS", 2))  # 동시 TTS 생성 수
+MAX_CONCURRENT_EMBEDDING = int(os.getenv("MAX_CONCURRENT_EMBEDDING", 1))  # 동시 임베딩 생성 수
+MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", 10))  # 최대 대기 큐 크기
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", 300.0))  # 요청 타임아웃 (초)
+
 # ==================== 보안 설정 ====================
 # 파일명 생성 시 사용할 안전한 문자
 SAFE_FILENAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"

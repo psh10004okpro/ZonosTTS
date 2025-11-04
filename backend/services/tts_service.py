@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.database import AudioFile, Speaker
 from models.zonos_model import ZonosModelWrapper, get_zonos_model
+from utils.concurrency import get_concurrency_manager
 from loguru import logger
 
 
@@ -50,77 +51,83 @@ class TTSService:
         Returns:
             (파일 경로, 메타데이터) 튜플
         """
-        try:
-            # Zonos 모델 가져오기
-            model = get_zonos_model()
+        # 동시성 관리자 가져오기
+        concurrency = get_concurrency_manager()
+        request_id = f"tts_{uuid.uuid4().hex[:8]}"
 
-            # 화자 임베딩 로드 (있는 경우)
-            speaker_embedding = None
-            if speaker_id:
-                speaker_embedding = await self._load_speaker_embedding(db, speaker_id)
+        # 세마포어를 사용하여 동시 실행 제한
+        async with concurrency.acquire_tts(request_id):
+            try:
+                # Zonos 모델 가져오기
+                model = get_zonos_model()
 
-            # 음성 생성
-            logger.info(f"음성 생성 시작: 텍스트={text[:50]}... 화자={speaker_id}")
-            audio, sample_rate = model.generate_speech(
-                text=text,
-                speaker=speaker_embedding,
-                language=language,
-                speaking_rate=speaking_rate,
-                pitch_shift=pitch_shift,
-                emotion=emotion
-            )
+                # 화자 임베딩 로드 (있는 경우)
+                speaker_embedding = None
+                if speaker_id:
+                    speaker_embedding = await self._load_speaker_embedding(db, speaker_id)
 
-            # 파일명 생성
-            file_id = uuid.uuid4().hex[:12]
-            filename = f"tts_{file_id}_{int(datetime.now().timestamp())}.wav"
-            file_path = self.upload_dir / filename
-
-            # 파일 저장
-            model.save_audio(audio, sample_rate, str(file_path))
-            file_size = file_path.stat().st_size
-            duration = len(audio) / sample_rate
-
-            logger.info(f"✓ 파일 저장 완료: {filename} ({duration:.2f}초, {file_size} bytes)")
-
-            # DB에 저장
-            audio_file_obj = None
-            if save_to_db:
-                audio_file_obj = AudioFile(
-                    filename=filename,
+                # 음성 생성
+                logger.info(f"[{request_id}] 음성 생성 시작: 텍스트={text[:50]}... 화자={speaker_id}")
+                audio, sample_rate = model.generate_speech(
                     text=text,
-                    speaker_id=speaker_id,
+                    speaker=speaker_embedding,
                     language=language,
                     speaking_rate=speaking_rate,
                     pitch_shift=pitch_shift,
-                    emotion=emotion,
-                    duration=duration,
-                    file_size=file_size
+                    emotion=emotion
                 )
-                db.add(audio_file_obj)
-                await db.commit()
-                await db.refresh(audio_file_obj)
 
-                # 화자 사용 횟수 증가
-                if speaker_id:
-                    await self._increment_speaker_usage(db, speaker_id)
+                # 파일명 생성
+                file_id = uuid.uuid4().hex[:12]
+                filename = f"tts_{file_id}_{int(datetime.now().timestamp())}.wav"
+                file_path = self.upload_dir / filename
 
-                logger.info(f"✓ DB 저장 완료: ID={audio_file_obj.id}")
+                # 파일 저장
+                model.save_audio(audio, sample_rate, str(file_path))
+                file_size = file_path.stat().st_size
+                duration = len(audio) / sample_rate
 
-            # 메타데이터 반환
-            metadata = {
-                "id": audio_file_obj.id if audio_file_obj else None,
-                "filename": filename,
-                "file_path": str(file_path),
-                "duration": duration,
-                "file_size": file_size,
-                "sample_rate": sample_rate
-            }
+                logger.info(f"[{request_id}] ✓ 파일 저장 완료: {filename} ({duration:.2f}초, {file_size} bytes)")
 
-            return str(file_path), metadata
+                # DB에 저장
+                audio_file_obj = None
+                if save_to_db:
+                    audio_file_obj = AudioFile(
+                        filename=filename,
+                        text=text,
+                        speaker_id=speaker_id,
+                        language=language,
+                        speaking_rate=speaking_rate,
+                        pitch_shift=pitch_shift,
+                        emotion=emotion,
+                        duration=duration,
+                        file_size=file_size
+                    )
+                    db.add(audio_file_obj)
+                    await db.commit()
+                    await db.refresh(audio_file_obj)
 
-        except Exception as e:
-            logger.error(f"음성 파일 생성 실패: {e}")
-            raise
+                    # 화자 사용 횟수 증가
+                    if speaker_id:
+                        await self._increment_speaker_usage(db, speaker_id)
+
+                    logger.info(f"[{request_id}] ✓ DB 저장 완료: ID={audio_file_obj.id}")
+
+                # 메타데이터 반환
+                metadata = {
+                    "id": audio_file_obj.id if audio_file_obj else None,
+                    "filename": filename,
+                    "file_path": str(file_path),
+                    "duration": duration,
+                    "file_size": file_size,
+                    "sample_rate": sample_rate
+                }
+
+                return str(file_path), metadata
+
+            except Exception as e:
+                logger.error(f"[{request_id}] 음성 파일 생성 실패: {e}")
+                raise
 
     async def get_audio_file(self, db: AsyncSession, audio_id: int) -> Optional[AudioFile]:
         """오디오 파일 정보 조회"""
