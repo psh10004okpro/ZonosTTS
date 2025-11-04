@@ -13,6 +13,7 @@ from loguru import logger
 from models.database import db_instance
 from routes import tts, speakers, audio, system
 from utils.exceptions import ZonosTTSException, get_http_status_code, format_error_response
+from utils.redis_client import get_redis_manager
 
 
 # ==================== 애플리케이션 생명주기 ====================
@@ -34,6 +35,15 @@ async def lifespan(app: FastAPI):
     os.makedirs("uploads/embeddings", exist_ok=True)
     logger.info("✓ 업로드 디렉토리 생성 완료")
 
+    # Redis 연결 초기화
+    logger.info("Redis 연결 초기화 중...")
+    redis_manager = get_redis_manager()
+    await redis_manager.connect()
+    if redis_manager.is_available():
+        logger.info("✓ Redis 연결 완료 (캐싱 활성화)")
+    else:
+        logger.info("⚠ Redis 미사용 (캐싱 비활성화)")
+
     # Zonos 모델 사전 로드 (선택사항 - 첫 요청 시 로드해도 됨)
     # from models.zonos_model import get_zonos_model
     # logger.info("Zonos 모델 로드 중...")
@@ -46,7 +56,14 @@ async def lifespan(app: FastAPI):
 
     # 종료 시
     logger.info("Zonos TTS API 종료 중...")
+
+    # Redis 연결 종료
+    redis_manager = get_redis_manager()
+    await redis_manager.close()
+
+    # 데이터베이스 종료
     await db_instance.close()
+
     logger.info("✓ Zonos TTS API 종료 완료")
 
 

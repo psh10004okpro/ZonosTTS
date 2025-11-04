@@ -89,6 +89,29 @@ SAFE_FILENAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234
 RATE_LIMIT_PER_MINUTE = 60
 RATE_LIMIT_PER_HOUR = 1000
 
+# ==================== 캐싱 설정 ====================
+# Redis 연결 설정
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_DB = int(os.getenv("REDIS_DB", 0))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+REDIS_ENABLED = os.getenv("REDIS_ENABLED", "true").lower() == "true"
+
+# 캐시 TTL (Time To Live) 설정 (초)
+CACHE_TTL_SPEAKER_EMBEDDING = int(os.getenv("CACHE_TTL_SPEAKER_EMBEDDING", 86400))  # 24시간
+CACHE_TTL_TTS_RESULT = int(os.getenv("CACHE_TTL_TTS_RESULT", 3600))  # 1시간
+CACHE_TTL_AUDIO_METADATA = int(os.getenv("CACHE_TTL_AUDIO_METADATA", 1800))  # 30분
+
+# 캐시 크기 제한
+MAX_CACHE_SIZE_MB = int(os.getenv("MAX_CACHE_SIZE_MB", 1024))  # 1GB
+MAX_CACHED_EMBEDDINGS = int(os.getenv("MAX_CACHED_EMBEDDINGS", 100))
+
+# 캐시 키 프리픽스
+CACHE_KEY_PREFIX = "zonos_tts"
+CACHE_KEY_SPEAKER_EMBEDDING = f"{CACHE_KEY_PREFIX}:speaker_embedding"
+CACHE_KEY_TTS_RESULT = f"{CACHE_KEY_PREFIX}:tts_result"
+CACHE_KEY_AUDIO_METADATA = f"{CACHE_KEY_PREFIX}:audio_metadata"
+
 # ==================== 로깅 설정 ====================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FORMAT = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"

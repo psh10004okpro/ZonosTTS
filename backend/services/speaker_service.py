@@ -16,7 +16,13 @@ from models.database import Speaker
 from models.zonos_model import ZonosModelWrapper, get_zonos_model
 from utils.file_validator import FileValidator, validate_audio_file
 from utils.concurrency import get_concurrency_manager
-from config import SPEAKER_UPLOAD_DIR, EMBEDDING_DIR
+from utils.cache_service import get_cache_service
+from config import (
+    SPEAKER_UPLOAD_DIR,
+    EMBEDDING_DIR,
+    CACHE_KEY_SPEAKER_EMBEDDING,
+    CACHE_TTL_SPEAKER_EMBEDDING
+)
 from loguru import logger
 
 
@@ -114,6 +120,10 @@ class SpeakerService:
                         status_code=500,
                         detail="화자 임베딩 생성에 실패했습니다. 오디오 품질을 확인해주세요."
                     )
+
+                # 임베딩을 캐시에 저장 (UUID를 키로 사용)
+                embedding_uuid = safe_filename.split('_')[1]
+                await self._cache_speaker_embedding(embedding_uuid, speaker_embedding)
 
             # ============ 6. DB에 저장 ============
             speaker = Speaker(
@@ -218,3 +228,77 @@ class SpeakerService:
         except Exception as e:
             logger.error(f"오디오 검증 실패: {e}")
             return False, 0.0, f"오디오 파일 읽기 실패: {str(e)}"
+
+    # ==================== 캐싱 관련 메서드 ====================
+
+    async def _cache_speaker_embedding(self, embedding_id: str, embedding):
+        """화자 임베딩을 캐시에 저장"""
+        cache = get_cache_service()
+        cache_key = cache.generate_cache_key(
+            CACHE_KEY_SPEAKER_EMBEDDING,
+            embedding_id=embedding_id
+        )
+
+        success = await cache.set(
+            cache_key,
+            embedding,
+            ttl=CACHE_TTL_SPEAKER_EMBEDDING
+        )
+
+        if success:
+            logger.debug(f"화자 임베딩 캐시됨: {embedding_id}")
+        else:
+            logger.warning(f"화자 임베딩 캐싱 실패: {embedding_id}")
+
+    async def load_speaker_embedding_with_cache(self, speaker_id: int, embedding_path: str):
+        """
+        화자 임베딩 로드 (캐시 우선)
+
+        Args:
+            speaker_id: 화자 ID
+            embedding_path: 임베딩 파일 경로
+
+        Returns:
+            임베딩 텐서 또는 None
+        """
+        # 캐시 키 생성
+        cache = get_cache_service()
+        embedding_id = str(speaker_id)
+        cache_key = cache.generate_cache_key(
+            CACHE_KEY_SPEAKER_EMBEDDING,
+            embedding_id=embedding_id
+        )
+
+        # 1. 캐시에서 조회 시도
+        cached_embedding = await cache.get(cache_key)
+        if cached_embedding is not None:
+            logger.debug(f"캐시에서 임베딩 로드: speaker_id={speaker_id}")
+            return cached_embedding
+
+        # 2. 캐시 미스 - 파일에서 로드
+        logger.debug(f"캐시 미스 - 파일에서 임베딩 로드: {embedding_path}")
+        model = get_zonos_model()
+        embedding = model.load_speaker_embedding(embedding_path)
+
+        if embedding is not None:
+            # 캐시에 저장
+            await cache.set(
+                cache_key,
+                embedding,
+                ttl=CACHE_TTL_SPEAKER_EMBEDDING
+            )
+            logger.debug(f"임베딩 캐시에 저장: speaker_id={speaker_id}")
+
+        return embedding
+
+    async def invalidate_speaker_cache(self, speaker_id: int):
+        """화자 임베딩 캐시 무효화"""
+        cache = get_cache_service()
+        embedding_id = str(speaker_id)
+        cache_key = cache.generate_cache_key(
+            CACHE_KEY_SPEAKER_EMBEDDING,
+            embedding_id=embedding_id
+        )
+
+        await cache.delete(cache_key)
+        logger.info(f"화자 캐시 무효화: speaker_id={speaker_id}")

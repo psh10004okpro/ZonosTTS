@@ -4,6 +4,7 @@
 
 from fastapi import APIRouter
 from utils.concurrency import get_concurrency_manager
+from utils.cache_service import get_cache_service
 
 router = APIRouter(prefix="/api/system", tags=["System"])
 
@@ -65,4 +66,73 @@ async def health_check():
     return {
         "status": "healthy",
         "message": "시스템이 정상적으로 작동 중입니다."
+    }
+
+
+@router.get("/cache/stats", summary="캐시 통계 조회")
+async def get_cache_stats():
+    """
+    Redis 캐시 통계 조회
+
+    Returns:
+        - enabled: 캐싱 활성화 여부
+        - memory_used_mb: 사용 중인 메모리 (MB)
+        - total_keys: 총 키 개수
+        - speaker_embeddings_cached: 캐시된 화자 임베딩 수
+        - tts_results_cached: 캐시된 TTS 결과 수
+        - connected_clients: 연결된 클라이언트 수
+        - uptime_seconds: Redis 업타임 (초)
+    """
+    cache = get_cache_service()
+    stats = await cache.get_stats()
+
+    return {
+        "success": True,
+        "data": stats
+    }
+
+
+@router.delete("/cache/clear", summary="캐시 전체 삭제")
+async def clear_cache():
+    """
+    모든 캐시 삭제 (주의: 복구 불가)
+
+    Returns:
+        성공 여부
+    """
+    cache = get_cache_service()
+    success = await cache.clear_all()
+
+    if success:
+        return {
+            "success": True,
+            "message": "모든 캐시가 삭제되었습니다."
+        }
+    else:
+        return {
+            "success": False,
+            "message": "캐시 삭제 실패"
+        }
+
+
+@router.delete("/cache/pattern/{pattern}", summary="패턴별 캐시 삭제")
+async def clear_cache_pattern(pattern: str):
+    """
+    패턴과 일치하는 캐시 삭제
+
+    Args:
+        pattern: 삭제할 키 패턴 (예: speaker_embedding:*)
+
+    Returns:
+        삭제된 키 개수
+    """
+    cache = get_cache_service()
+    # 전체 키 형식으로 변환
+    full_pattern = f"zonos_tts:{pattern}"
+    deleted_count = await cache.delete_pattern(full_pattern)
+
+    return {
+        "success": True,
+        "message": f"{deleted_count}개 키가 삭제되었습니다.",
+        "deleted_count": deleted_count
     }
