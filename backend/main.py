@@ -8,12 +8,14 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 from loguru import logger
 
 from models.database import db_instance
 from routes import tts, speakers, audio, system
 from utils.exceptions import ZonosTTSException, get_http_status_code, format_error_response
 from utils.redis_client import get_redis_manager
+from utils.metrics import get_metrics_collector
 
 
 # ==================== 애플리케이션 생명주기 ====================
@@ -154,6 +156,14 @@ async def general_exception_handler(request: Request, exc: Exception):
             "details": {}
         }
     )
+
+
+# ==================== Prometheus 모니터링 ====================
+
+# Prometheus metrics 엔드포인트 설정
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+
+logger.info("✓ Prometheus 메트릭 노출: /metrics")
 
 
 # ==================== 정적 파일 서빙 ====================

@@ -18,6 +18,11 @@ services:
       - PORT=8000
       - DEVICE=cuda  # 또는 cpu
       - ZONOS_MODEL=Zyphra/Zonos-v0.1-transformer
+      - REDIS_ENABLED=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
     deploy:
       resources:
         reservations:
@@ -44,6 +49,56 @@ services:
       - backend
     restart: unless-stopped
 
+  # Redis (캐싱)
+  redis:
+    image: redis:7-alpine
+    container_name: zonos-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+  # Prometheus (메트릭 수집)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: zonos-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Grafana (메트릭 시각화)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: zonos-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/zonos-tts.json
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   uploads:
   db_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

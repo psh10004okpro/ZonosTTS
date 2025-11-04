@@ -1,0 +1,157 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "zonos-tts-main",
+    "title": "Zonos TTS API Dashboard",
+    "tags": ["zonos", "tts", "api"],
+    "timezone": "browser",
+    "schemaVersion": 36,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "HTTP 요청 속도 (RPS)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(http_requests_total[5m])",
+            "legendFormat": "{{method}} {{handler}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "HTTP 응답 시간 (p95)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))",
+            "legendFormat": "p99"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "TTS 생성 시간",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(tts_generation_duration_seconds_bucket[5m]))",
+            "legendFormat": "p95 - {{language}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "캐시 히트율",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "rate(cache_requests_total{status=\"hit\"}[5m]) / rate(cache_requests_total[5m]) * 100"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 8}
+      },
+      {
+        "id": 5,
+        "title": "활성 TTS 요청",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "active_tts_requests"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 8}
+      },
+      {
+        "id": 6,
+        "title": "대기 중인 요청",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "queued_tts_requests"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 12}
+      },
+      {
+        "id": 7,
+        "title": "에러율",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(errors_total[5m])",
+            "legendFormat": "{{error_type}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 8,
+        "title": "캐시 메모리 사용량 (MB)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "cache_memory_usage_megabytes"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "id": 9,
+        "title": "TTS 요청 성공률",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(tts_requests_total{status=\"success\"}[5m]) / rate(tts_requests_total[5m]) * 100"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 8, "x": 0, "y": 24},
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "min": 0,
+            "max": 100,
+            "thresholds": {
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 90, "color": "yellow"},
+                {"value": 95, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "화자 임베딩 생성 시간",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(speaker_embedding_duration_seconds_bucket[5m]))"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 8, "x": 8, "y": 24}
+      },
+      {
+        "id": 11,
+        "title": "총 TTS 요청 수",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(tts_requests_total)"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 8, "x": 16, "y": 24}
+      }
+    ]
+  }
+}
