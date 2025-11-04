@@ -4,13 +4,15 @@ Zonos TTS API - FastAPI 메인 애플리케이션
 
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from loguru import logger
 
 from models.database import db_instance
 from routes import tts, speakers, audio, system
+from utils.exceptions import ZonosTTSException, get_http_status_code, format_error_response
 
 
 # ==================== 애플리케이션 생명주기 ====================
@@ -101,6 +103,40 @@ app.include_router(tts.router)
 app.include_router(speakers.router)
 app.include_router(audio.router)
 app.include_router(system.router)
+
+
+# ==================== 전역 예외 핸들러 ====================
+
+@app.exception_handler(ZonosTTSException)
+async def zonos_exception_handler(request: Request, exc: ZonosTTSException):
+    """Zonos TTS 커스텀 예외 핸들러"""
+    status_code = get_http_status_code(exc)
+    response = format_error_response(exc)
+
+    logger.error(
+        f"ZonosTTS 예외 발생: {exc.error_code} - {exc.message} "
+        f"(경로: {request.url.path}, 상태: {status_code})"
+    )
+
+    return JSONResponse(
+        status_code=status_code,
+        content=response
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """일반 예외 핸들러 (폴백)"""
+    logger.exception(f"처리되지 않은 예외 발생: {exc} (경로: {request.url.path})")
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "InternalServerError",
+            "message": "서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            "details": {}
+        }
+    )
 
 
 # ==================== 정적 파일 서빙 ====================

@@ -9,6 +9,8 @@ from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 from loguru import logger
 
+from utils.exceptions import QueueFullError, RequestTimeoutError
+
 
 class ConcurrencyManager:
     """
@@ -87,9 +89,14 @@ class ConcurrencyManager:
         # 큐 크기 체크
         if self.stats["tts_queued"] >= self.max_queue_size:
             logger.warning(f"[{request_id}] TTS 큐가 가득 참 ({self.max_queue_size})")
-            raise Exception(
+            raise QueueFullError(
                 f"서버가 현재 많은 요청을 처리 중입니다. "
-                f"잠시 후 다시 시도해주세요. (대기 중: {self.stats['tts_queued']})"
+                f"잠시 후 다시 시도해주세요.",
+                details={
+                    "queue_type": "tts",
+                    "queued_count": self.stats['tts_queued'],
+                    "max_queue_size": self.max_queue_size
+                }
             )
 
         # 대기 시작
@@ -135,9 +142,13 @@ class ConcurrencyManager:
             async with self.stats_lock:
                 self.stats["tts_failed"] += 1
                 self.stats["tts_queued"] -= 1
-            raise asyncio.TimeoutError(
-                f"요청 처리 시간이 초과되었습니다 ({self.timeout}초). "
-                f"텍스트를 짧게 나눠서 시도해주세요."
+            raise RequestTimeoutError(
+                f"요청 처리 시간이 초과되었습니다. "
+                f"텍스트를 짧게 나눠서 시도해주세요.",
+                details={
+                    "timeout": self.timeout,
+                    "request_id": request_id
+                }
             )
 
         except Exception as e:
@@ -182,9 +193,14 @@ class ConcurrencyManager:
         # 큐 크기 체크
         if self.stats["embedding_queued"] >= self.max_queue_size:
             logger.warning(f"[{request_id}] 임베딩 큐가 가득 참")
-            raise Exception(
+            raise QueueFullError(
                 f"서버가 현재 많은 요청을 처리 중입니다. "
-                f"잠시 후 다시 시도해주세요."
+                f"잠시 후 다시 시도해주세요.",
+                details={
+                    "queue_type": "embedding",
+                    "queued_count": self.stats['embedding_queued'],
+                    "max_queue_size": self.max_queue_size
+                }
             )
 
         # 대기 시작
@@ -226,8 +242,12 @@ class ConcurrencyManager:
             async with self.stats_lock:
                 self.stats["embedding_failed"] += 1
                 self.stats["embedding_queued"] -= 1
-            raise asyncio.TimeoutError(
-                f"화자 임베딩 생성 시간이 초과되었습니다 ({self.timeout}초)."
+            raise RequestTimeoutError(
+                f"화자 임베딩 생성 시간이 초과되었습니다.",
+                details={
+                    "timeout": self.timeout,
+                    "request_id": request_id
+                }
             )
 
         except Exception as e:

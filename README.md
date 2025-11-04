@@ -517,6 +517,166 @@ async with concurrency.acquire_tts(request_id):
 }
 ```
 
+## 🛡️ 에러 처리 및 복원력
+
+### 커스텀 예외 시스템
+
+시스템은 세분화된 예외 클래스로 명확한 에러 처리를 제공합니다:
+
+**예외 계층 구조:**
+
+```python
+ZonosTTSException (베이스)
+├── ModelException
+│   ├── ModelLoadError
+│   ├── ModelNotLoadedError
+│   └── ModelInferenceError
+├── FileException
+│   ├── FileValidationError
+│   ├── FileSizeTooLargeError
+│   └── InvalidFileTypeError
+├── ConcurrencyException
+│   ├── QueueFullError
+│   └── RequestTimeoutError
+└── APIException
+    ├── InvalidInputError
+    └── RateLimitExceededError
+```
+
+**에러 응답 형식:**
+
+```json
+{
+  "error": "FileSizeTooLargeError",
+  "message": "파일이 너무 큽니다. (현재: 75.23MB, 최대: 50.00MB)",
+  "details": {
+    "file_size": 78901234,
+    "max_size": 52428800
+  }
+}
+```
+
+### 재시도 로직 (Exponential Backoff)
+
+네트워크 오류 및 일시적 장애에 대한 자동 재시도:
+
+```python
+from utils.retry import retry_async, RetryConfig
+
+@retry_async(RetryConfig(
+    max_retries=3,
+    initial_delay=1.0,
+    exponential_base=2.0
+))
+async def unstable_operation():
+    # 재시도 가능한 작업
+    pass
+```
+
+**지원 기능:**
+- 지수 백오프 (1초 → 2초 → 4초 ...)
+- 랜덤 지터 (충돌 방지)
+- 재시도 가능한 예외 지정
+- 최대 지연 시간 제한
+
+### Circuit Breaker 패턴
+
+연속 실패 시 시스템 보호:
+
+```python
+from utils.retry import CircuitBreaker, CircuitState
+
+circuit = CircuitBreaker(
+    failure_threshold=5,      # 5번 실패 시 차단
+    recovery_timeout=60.0     # 60초 후 복구 시도
+)
+
+result = circuit.call(risky_operation)
+```
+
+**상태 전환:**
+- **CLOSED**: 정상 동작
+- **OPEN**: 차단 (요청 즉시 거부)
+- **HALF_OPEN**: 복구 시도 (2번 성공 시 CLOSED로 복귀)
+
+## 🧪 테스팅
+
+### 테스트 실행
+
+**전체 테스트 실행:**
+
+```bash
+cd backend
+pytest
+```
+
+**특정 카테고리만 실행:**
+
+```bash
+# 단위 테스트만
+pytest tests/unit/
+
+# 통합 테스트만
+pytest tests/integration/
+
+# 특정 파일
+pytest tests/unit/test_file_validator.py
+```
+
+**커버리지 리포트:**
+
+```bash
+# 터미널 출력
+pytest --cov
+
+# HTML 리포트 생성
+pytest --cov --cov-report=html
+# 결과: htmlcov/index.html
+```
+
+### 테스트 구조
+
+```
+backend/tests/
+├── conftest.py           # 공통 fixtures
+├── unit/                 # 단위 테스트
+│   ├── test_file_validator.py
+│   ├── test_concurrency.py
+│   └── test_retry.py
+└── integration/          # 통합 테스트
+    └── test_api_endpoints.py
+```
+
+### 주요 Fixtures
+
+```python
+@pytest.fixture
+async def db_session():
+    """테스트용 인메모리 데이터베이스"""
+
+@pytest.fixture
+def test_client():
+    """FastAPI 테스트 클라이언트"""
+
+@pytest.fixture
+def mock_audio_file():
+    """모의 오디오 파일"""
+```
+
+### 테스트 작성 예시
+
+```python
+@pytest.mark.asyncio
+async def test_tts_generation(test_client, sample_text):
+    response = test_client.post("/api/tts/generate", json={
+        "text": sample_text,
+        "language": "en-us"
+    })
+
+    assert response.status_code == 200
+    assert "file_path" in response.json()
+```
+
 ## 🐛 문제 해결
 
 ### 1. CUDA out of memory

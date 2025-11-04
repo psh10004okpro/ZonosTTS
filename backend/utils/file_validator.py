@@ -10,7 +10,7 @@ import magic
 import mimetypes
 from pathlib import Path
 from typing import Tuple, Optional
-from fastapi import UploadFile, HTTPException
+from fastapi import UploadFile
 from loguru import logger
 
 from config import (
@@ -20,6 +20,13 @@ from config import (
     MIN_SPEAKER_DURATION,
     MAX_SPEAKER_DURATION,
     SAFE_FILENAME_CHARS,
+)
+from utils.exceptions import (
+    FileSizeTooLargeError,
+    InvalidFileTypeError,
+    AudioDurationError,
+    FileValidationError,
+    InvalidInputError,
 )
 
 
@@ -36,25 +43,31 @@ class FileValidator:
             max_size: 최대 파일 크기 (바이트)
 
         Raises:
-            HTTPException: 파일이 너무 큰 경우
+            FileSizeTooLargeError: 파일이 너무 큰 경우
+            FileValidationError: 빈 파일인 경우
         """
         # 파일 크기를 확인하기 위해 끝까지 읽기
         file.file.seek(0, 2)  # 파일 끝으로 이동
         file_size = file.file.tell()
         file.file.seek(0)  # 다시 처음으로
 
+        if file_size == 0:
+            raise FileValidationError(
+                "빈 파일은 업로드할 수 없습니다",
+                details={"file_size": 0}
+            )
+
         if file_size > max_size:
             size_mb = file_size / (1024 * 1024)
             max_mb = max_size / (1024 * 1024)
-            raise HTTPException(
-                status_code=413,
-                detail=f"파일이 너무 큽니다. (현재: {size_mb:.2f}MB, 최대: {max_mb:.2f}MB)"
-            )
-
-        if file_size == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="빈 파일은 업로드할 수 없습니다"
+            raise FileSizeTooLargeError(
+                f"파일이 너무 큽니다. (현재: {size_mb:.2f}MB, 최대: {max_mb:.2f}MB)",
+                details={
+                    "file_size": file_size,
+                    "max_size": max_size,
+                    "size_mb": size_mb,
+                    "max_mb": max_mb
+                }
             )
 
         logger.info(f"파일 크기 검증 통과: {file_size / 1024:.2f}KB")
@@ -68,20 +81,23 @@ class FileValidator:
             filename: 파일명
 
         Raises:
-            HTTPException: 허용되지 않은 확장자
+            InvalidFileTypeError: 허용되지 않은 확장자
         """
         ext = Path(filename).suffix.lower()
 
         if not ext:
-            raise HTTPException(
-                status_code=400,
-                detail="파일 확장자가 없습니다"
+            raise InvalidFileTypeError(
+                "파일 확장자가 없습니다",
+                details={"filename": filename}
             )
 
         if ext not in ALLOWED_AUDIO_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"지원하지 않는 파일 형식입니다. 허용된 형식: {', '.join(ALLOWED_AUDIO_EXTENSIONS)}"
+            raise InvalidFileTypeError(
+                f"지원하지 않는 파일 형식입니다. 허용된 형식: {', '.join(ALLOWED_AUDIO_EXTENSIONS)}",
+                details={
+                    "extension": ext,
+                    "allowed_extensions": list(ALLOWED_AUDIO_EXTENSIONS)
+                }
             )
 
         logger.info(f"파일 확장자 검증 통과: {ext}")
@@ -98,7 +114,8 @@ class FileValidator:
             검증된 MIME 타입
 
         Raises:
-            HTTPException: 허용되지 않은 MIME 타입
+            FileValidationError: MIME 타입 감지 실패
+            InvalidFileTypeError: 허용되지 않은 MIME 타입
         """
         # 파일 시작 부분 읽기 (Magic bytes 확인)
         content = await file.read(2048)
@@ -109,16 +126,19 @@ class FileValidator:
             mime_type = magic.from_buffer(content, mime=True)
         except Exception as e:
             logger.error(f"MIME 타입 감지 실패: {e}")
-            raise HTTPException(
-                status_code=400,
-                detail="파일 형식을 확인할 수 없습니다"
+            raise FileValidationError(
+                "파일 형식을 확인할 수 없습니다",
+                details={"error": str(e)}
             )
 
         # MIME 타입 검증
         if mime_type not in ALLOWED_AUDIO_MIME_TYPES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"지원하지 않는 오디오 형식입니다. (감지된 타입: {mime_type})"
+            raise InvalidFileTypeError(
+                f"지원하지 않는 오디오 형식입니다. (감지된 타입: {mime_type})",
+                details={
+                    "detected_mime": mime_type,
+                    "allowed_mimes": list(ALLOWED_AUDIO_MIME_TYPES)
+                }
             )
 
         logger.info(f"MIME 타입 검증 통과: {mime_type}")
@@ -139,18 +159,24 @@ class FileValidator:
             max_duration: 최대 길이
 
         Raises:
-            HTTPException: 길이가 범위를 벗어난 경우
+            AudioDurationError: 길이가 범위를 벗어난 경우
         """
         if duration < min_duration:
-            raise HTTPException(
-                status_code=400,
-                detail=f"오디오가 너무 짧습니다. (현재: {duration:.1f}초, 최소: {min_duration:.1f}초)"
+            raise AudioDurationError(
+                f"오디오가 너무 짧습니다. (현재: {duration:.1f}초, 최소: {min_duration:.1f}초)",
+                details={
+                    "duration": duration,
+                    "min_duration": min_duration
+                }
             )
 
         if duration > max_duration:
-            raise HTTPException(
-                status_code=400,
-                detail=f"오디오가 너무 깁니다. (현재: {duration:.1f}초, 최대: {max_duration:.1f}초)"
+            raise AudioDurationError(
+                f"오디오가 너무 깁니다. (현재: {duration:.1f}초, 최대: {max_duration:.1f}초)",
+                details={
+                    "duration": duration,
+                    "max_duration": max_duration
+                }
             )
 
         logger.info(f"오디오 길이 검증 통과: {duration:.1f}초")
@@ -201,20 +227,23 @@ class FileValidator:
             정제된 텍스트
 
         Raises:
-            HTTPException: 텍스트가 너무 긴 경우
+            InvalidInputError: 텍스트가 비었거나 너무 긴 경우
         """
         if not text or not text.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="텍스트를 입력해주세요"
+            raise InvalidInputError(
+                "텍스트를 입력해주세요",
+                details={"text_length": len(text) if text else 0}
             )
 
         text = text.strip()
 
         if len(text) > max_length:
-            raise HTTPException(
-                status_code=400,
-                detail=f"텍스트가 너무 깁니다. (현재: {len(text)}자, 최대: {max_length}자)"
+            raise InvalidInputError(
+                f"텍스트가 너무 깁니다. (현재: {len(text)}자, 최대: {max_length}자)",
+                details={
+                    "text_length": len(text),
+                    "max_length": max_length
+                }
             )
 
         # 제어 문자 제거 (개행 제외)
@@ -234,13 +263,16 @@ async def validate_audio_file(file: UploadFile) -> Tuple[str, int]:
         (MIME 타입, 파일 크기) 튜플
 
     Raises:
-        HTTPException: 검증 실패 시
+        FileValidationError: 검증 실패 시
     """
     validator = FileValidator()
 
     # 1. 파일명 검증
     if not file.filename:
-        raise HTTPException(status_code=400, detail="파일명이 없습니다")
+        raise FileValidationError(
+            "파일명이 없습니다",
+            details={"file": str(file)}
+        )
 
     # 2. 확장자 검증
     validator.validate_file_extension(file.filename)
