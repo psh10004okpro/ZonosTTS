@@ -9,6 +9,7 @@ from typing import List
 
 from models.database import get_db, SpeakerResponse, SpeakerCreate
 from services.speaker_service import SpeakerService
+from config import SUPPORTED_LANGUAGES, ALLOWED_AUDIO_EXTENSIONS
 from loguru import logger
 
 router = APIRouter(prefix="/api/speakers", tags=["Speakers"])
@@ -19,50 +20,52 @@ speaker_service = SpeakerService()
 
 @router.post("/upload", response_model=SpeakerResponse)
 async def upload_speaker(
-    name: str = Form(..., description="화자 이름"),
-    language: str = Form("en-us", description="언어"),
-    audio_file: UploadFile = File(..., description="화자 샘플 오디오 (5-30초)"),
+    name: str = Form(..., min_length=1, max_length=100, description="화자 이름"),
+    language: str = Form("en-us", description="언어 (en-us, ja, zh, fr, de)"),
+    audio_file: UploadFile = File(..., description="화자 샘플 오디오 (5-30초, 최대 50MB)"),
     db: AsyncSession = Depends(get_db)
 ):
     """
     새 화자 샘플 업로드
 
+    **보안 검증:**
+    - 파일 크기: 최대 50MB
+    - 파일 형식: WAV, MP3, FLAC, OGG, M4A, AAC만 허용
+    - MIME 타입: 실제 파일 내용 검증 (magic bytes)
+    - 오디오 길이: 5초 이상 30초 이하
+
     **Form 데이터:**
-    - name: 화자 이름 (필수)
+    - name: 화자 이름 (필수, 1-100자)
     - language: 언어 (기본 en-us)
-    - audio_file: 오디오 파일 (5-30초, WAV/MP3/FLAC 등)
+    - audio_file: 오디오 파일
 
     **응답:**
     - 생성된 화자 정보
+
+    **에러 코드:**
+    - 400: 검증 실패 (파일 형식, 크기, 길이 등)
+    - 413: 파일이 너무 큼
+    - 500: 서버 내부 오류
     """
-    try:
-        logger.info(f"화자 업로드 요청: 이름={name}, 파일={audio_file.filename}")
-
-        # 파일 형식 검증
-        allowed_extensions = {".wav", ".mp3", ".flac", ".ogg", ".m4a"}
-        file_ext = audio_file.filename.split(".")[-1].lower()
-        if f".{file_ext}" not in allowed_extensions:
-            raise HTTPException(
-                status_code=400,
-                detail=f"지원하지 않는 파일 형식입니다. 허용: {allowed_extensions}"
-            )
-
-        # 화자 생성
-        speaker = await speaker_service.create_speaker(
-            db=db,
-            name=name,
-            audio_file=audio_file,
-            language=language
+    # 언어 검증
+    if language not in SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"지원하지 않는 언어입니다. 지원 언어: {', '.join(SUPPORTED_LANGUAGES)}"
         )
 
-        logger.info(f"✓ 화자 업로드 완료: ID={speaker.id}, 이름={name}")
-        return speaker
+    logger.info(f"화자 업로드 요청: 이름={name}, 언어={language}, 파일={audio_file.filename}")
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"화자 업로드 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"화자 업로드 실패: {str(e)}")
+    # 화자 생성 (서비스에서 모든 검증 수행)
+    speaker = await speaker_service.create_speaker(
+        db=db,
+        name=name,
+        audio_file=audio_file,
+        language=language
+    )
+
+    logger.info(f"✓ 화자 업로드 완료: ID={speaker.id}, 이름={name}, 길이={speaker.duration:.1f}초")
+    return speaker
 
 
 @router.get("/list", response_model=List[SpeakerResponse])

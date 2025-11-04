@@ -7,13 +7,15 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import UploadFile
+from fastapi import UploadFile, HTTPException
 
 from models.database import Speaker
 from models.zonos_model import ZonosModelWrapper, get_zonos_model
+from utils.file_validator import FileValidator, validate_audio_file
+from config import SPEAKER_UPLOAD_DIR, EMBEDDING_DIR
 from loguru import logger
 
 
@@ -22,11 +24,12 @@ class SpeakerService:
 
     def __init__(
         self,
-        speaker_upload_dir: str = "uploads/speakers",
-        embedding_dir: str = "uploads/embeddings"
+        speaker_upload_dir: str = SPEAKER_UPLOAD_DIR,
+        embedding_dir: str = EMBEDDING_DIR
     ):
         self.speaker_upload_dir = Path(speaker_upload_dir)
         self.embedding_dir = Path(embedding_dir)
+        self.file_validator = FileValidator()
 
         self.speaker_upload_dir.mkdir(parents=True, exist_ok=True)
         self.embedding_dir.mkdir(parents=True, exist_ok=True)
@@ -50,25 +53,48 @@ class SpeakerService:
         Returns:
             생성된 Speaker 객체
         """
-        try:
-            # 파일명 생성
-            file_id = uuid.uuid4().hex[:12]
-            ext = Path(audio_file.filename).suffix
-            sample_filename = f"speaker_{file_id}_{int(datetime.now().timestamp())}{ext}"
-            sample_path = self.speaker_upload_dir / sample_filename
+        sample_path = None
+        embedding_path = None
 
-            # 오디오 파일 저장
-            logger.info(f"화자 샘플 저장 중: {sample_filename}")
+        try:
+            # ============ 1. 파일 보안 검증 ============
+            logger.info(f"화자 생성 시작: {name}")
+
+            # 파일 검증 (크기, MIME 타입, 확장자)
+            mime_type, file_size = await validate_audio_file(audio_file)
+            logger.info(f"파일 검증 완료: {mime_type}, {file_size / 1024:.2f}KB")
+
+            # 화자 이름 검증
+            if not name or not name.strip():
+                raise HTTPException(status_code=400, detail="화자 이름을 입력해주세요")
+
+            name = name.strip()[:100]  # 최대 100자
+
+            # ============ 2. 안전한 파일명 생성 ============
+            safe_filename = self.file_validator.generate_safe_filename(
+                audio_file.filename,
+                prefix="speaker"
+            )
+            sample_path = self.speaker_upload_dir / safe_filename
+
+            # ============ 3. 파일 저장 ============
+            logger.info(f"화자 샘플 저장 중: {safe_filename}")
             with open(sample_path, "wb") as f:
+                # 파일을 처음으로 되돌림
+                await audio_file.seek(0)
                 content = await audio_file.read()
                 f.write(content)
 
-            # 오디오 재생 시간 계산
+            # ============ 4. 오디오 길이 검증 ============
             model = get_zonos_model()
             duration = model.get_audio_duration(str(sample_path))
 
-            # 화자 임베딩 생성
-            embedding_filename = f"embedding_{file_id}.pt"
+            # 길이 검증 (5-30초)
+            self.file_validator.validate_audio_duration(duration)
+            logger.info(f"오디오 길이 검증 완료: {duration:.1f}초")
+
+            # ============ 5. 화자 임베딩 생성 ============
+            embedding_filename = f"embedding_{safe_filename.split('_')[1]}.pt"
             embedding_path = self.embedding_dir / embedding_filename
 
             logger.info(f"화자 임베딩 생성 중: {name}")
@@ -78,9 +104,12 @@ class SpeakerService:
             )
 
             if speaker_embedding is None:
-                raise Exception("화자 임베딩 생성 실패")
+                raise HTTPException(
+                    status_code=500,
+                    detail="화자 임베딩 생성에 실패했습니다. 오디오 품질을 확인해주세요."
+                )
 
-            # DB에 저장
+            # ============ 6. DB에 저장 ============
             speaker = Speaker(
                 name=name,
                 sample_path=str(sample_path),
@@ -94,17 +123,28 @@ class SpeakerService:
             await db.commit()
             await db.refresh(speaker)
 
-            logger.info(f"✓ 화자 생성 완료: ID={speaker.id}, 이름={name}")
+            logger.info(f"✓ 화자 생성 완료: ID={speaker.id}, 이름={name}, 길이={duration:.1f}초")
             return speaker
 
-        except Exception as e:
-            logger.error(f"화자 생성 실패: {e}")
-            # 롤백 및 파일 정리
-            if sample_path.exists():
-                sample_path.unlink()
-            if embedding_path.exists():
-                embedding_path.unlink()
+        except HTTPException:
+            # HTTPException은 그대로 전파
             raise
+        except Exception as e:
+            logger.error(f"화자 생성 실패: {e}", exc_info=True)
+
+            # 파일 정리
+            if sample_path and Path(sample_path).exists():
+                Path(sample_path).unlink()
+                logger.info(f"샘플 파일 정리: {sample_path}")
+            if embedding_path and Path(embedding_path).exists():
+                Path(embedding_path).unlink()
+                logger.info(f"임베딩 파일 정리: {embedding_path}")
+
+            # 일반적인 에러를 HTTPException으로 변환
+            raise HTTPException(
+                status_code=500,
+                detail=f"화자 생성 중 오류가 발생했습니다: {str(e)}"
+            )
 
     async def get_speaker(self, db: AsyncSession, speaker_id: int) -> Optional[Speaker]:
         """화자 정보 조회"""

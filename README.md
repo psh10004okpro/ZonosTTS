@@ -300,6 +300,74 @@ model = Zonos.from_pretrained(
 chunk_size = 50  # 작을수록 지연시간 감소, 처리량 감소
 ```
 
+## 🔒 보안 기능
+
+### 파일 업로드 보안 검증
+
+시스템은 다층 보안 검증을 통해 악성 파일 및 잘못된 파일을 차단합니다:
+
+**1. 파일 크기 제한**
+- 최대 업로드 크기: 50MB
+- 빈 파일 차단
+
+**2. 확장자 검증**
+- 허용된 확장자만 허용: `.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`, `.aac`
+- 확장자가 없는 파일 차단
+
+**3. MIME 타입 검증 (실제 파일 내용)**
+```python
+# python-magic을 사용한 Magic bytes 검사
+# 파일 확장자를 속여도 실제 내용으로 검증
+mime_type = magic.from_buffer(content, mime=True)
+```
+
+**4. 오디오 길이 검증**
+- 화자 샘플: 5초 이상 30초 이하만 허용
+- 너무 짧거나 긴 파일 차단
+
+**5. 안전한 파일명 생성**
+```python
+# UUID + 타임스탬프를 사용한 충돌 방지
+# 특수문자 제거로 경로 탐색 공격 방지
+filename = f"speaker_{uuid}_{timestamp}.wav"
+```
+
+**6. 텍스트 입력 검증**
+- 최대 길이 제한: 5,000자
+- 제어 문자 제거
+- XSS 방지
+
+### 보안 설정 (config.py)
+
+```python
+# 파일 크기 제한
+MAX_AUDIO_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+
+# 허용된 MIME 타입
+ALLOWED_AUDIO_MIME_TYPES = {
+    "audio/wav", "audio/mpeg", "audio/flac", ...
+}
+
+# 오디오 길이 제한
+MIN_SPEAKER_DURATION = 5.0  # 초
+MAX_SPEAKER_DURATION = 30.0
+```
+
+### 에러 처리
+
+모든 검증 실패는 명확한 HTTP 상태 코드와 메시지를 반환:
+
+- **400 Bad Request**: 검증 실패 (파일 형식, 길이 등)
+- **413 Payload Too Large**: 파일이 너무 큼
+- **500 Internal Server Error**: 서버 내부 오류
+
+```bash
+# 예시: 파일이 너무 큰 경우
+{
+  "detail": "파일이 너무 큽니다. (현재: 75.23MB, 최대: 50.00MB)"
+}
+```
+
 ## 🐛 문제 해결
 
 ### 1. CUDA out of memory
