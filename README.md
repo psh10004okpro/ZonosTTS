@@ -31,17 +31,22 @@ Zyphra의 오픈소스 TTS 모델 **Zonos**를 사용한 전문적인 음성 합
 zonos-tts/
 ├── backend/                  # FastAPI 백엔드
 │   ├── main.py              # 메인 애플리케이션
+│   ├── config.py            # 설정 및 상수
 │   ├── models/              # 데이터베이스 모델 및 Zonos 래퍼
 │   │   ├── database.py      # SQLAlchemy ORM 모델
 │   │   └── zonos_model.py   # Zonos 모델 래퍼
 │   ├── routes/              # API 라우터
 │   │   ├── tts.py           # TTS API
 │   │   ├── speakers.py      # 화자 관리 API
-│   │   └── audio.py         # 파일 관리 API
+│   │   ├── audio.py         # 파일 관리 API
+│   │   └── system.py        # 시스템 모니터링 API
 │   ├── services/            # 비즈니스 로직
 │   │   ├── tts_service.py   # TTS 서비스
 │   │   ├── speaker_service.py  # 화자 서비스
 │   │   └── stream_service.py   # 스트리밍 서비스
+│   ├── utils/               # 유틸리티
+│   │   ├── file_validator.py   # 파일 검증
+│   │   └── concurrency.py      # 동시성 제어
 │   └── requirements.txt     # Python 의존성
 ├── frontend/                # React 프론트엔드
 │   ├── src/
@@ -365,6 +370,150 @@ MAX_SPEAKER_DURATION = 30.0
 # 예시: 파일이 너무 큰 경우
 {
   "detail": "파일이 너무 큽니다. (현재: 75.23MB, 최대: 50.00MB)"
+}
+```
+
+## 🔄 동시성 제어
+
+### GPU 리소스 관리
+
+시스템은 세마포어 기반 동시성 제어를 통해 GPU 메모리 부족 및 과부하를 방지합니다.
+
+**주요 기능:**
+
+**1. 세마포어 기반 제한**
+```python
+# 동시에 실행 가능한 TTS 생성 작업 수 제한
+MAX_CONCURRENT_TTS = 2  # 기본값
+
+# 동시에 실행 가능한 임베딩 생성 작업 수 제한
+MAX_CONCURRENT_EMBEDDING = 1  # 기본값
+```
+
+**2. 큐 크기 제한**
+```python
+# 대기 큐에 들어갈 수 있는 최대 요청 수
+MAX_QUEUE_SIZE = 10
+
+# 큐가 가득 차면 새 요청은 즉시 거부됨
+# 에러 메시지: "서버가 현재 많은 요청을 처리 중입니다..."
+```
+
+**3. 요청 타임아웃**
+```python
+# 세마포어 획득 대기 시간 제한
+REQUEST_TIMEOUT = 300.0  # 초 (5분)
+
+# 타임아웃 발생 시 에러 반환
+```
+
+**4. 통계 추적**
+- 활성 TTS/임베딩 요청 수
+- 대기 중인 요청 수
+- 완료/실패한 총 요청 수
+- 평균 대기 시간
+
+### 동시성 설정
+
+**환경 변수로 조정:**
+
+`.env` 파일에 추가:
+```bash
+# 동시성 제어 설정
+MAX_CONCURRENT_TTS=2          # 동시 TTS 생성 수
+MAX_CONCURRENT_EMBEDDING=1     # 동시 임베딩 생성 수
+MAX_QUEUE_SIZE=10              # 최대 대기 큐 크기
+REQUEST_TIMEOUT=300.0          # 요청 타임아웃 (초)
+```
+
+**GPU 메모리에 따른 권장 설정:**
+
+| GPU VRAM | MAX_CONCURRENT_TTS | MAX_CONCURRENT_EMBEDDING |
+|----------|-------------------|-------------------------|
+| 6GB      | 1                 | 1                       |
+| 8GB      | 2                 | 1                       |
+| 12GB     | 3                 | 1                       |
+| 16GB+    | 4                 | 2                       |
+
+### 시스템 모니터링
+
+**통계 조회 API:**
+
+```bash
+# 동시성 통계 조회
+curl http://localhost:8000/api/system/stats
+
+# 응답 예시:
+{
+  "success": true,
+  "data": {
+    "tts_active": 2,
+    "tts_queued": 1,
+    "tts_completed": 45,
+    "tts_failed": 2,
+    "embedding_active": 0,
+    "embedding_queued": 0,
+    "embedding_completed": 5,
+    "embedding_failed": 0,
+    "avg_tts_wait_time": 1.23,
+    "avg_embedding_wait_time": 0.0,
+    "max_concurrent_tts": 2,
+    "max_concurrent_embedding": 1,
+    "max_queue_size": 10
+  }
+}
+```
+
+**헬스 체크:**
+
+```bash
+# 시스템 상태 확인
+curl http://localhost:8000/api/system/health
+
+# 정상:
+{
+  "status": "healthy",
+  "message": "시스템이 정상적으로 작동 중입니다."
+}
+
+# 과부하:
+{
+  "status": "unhealthy",
+  "message": "TTS 요청 큐가 가득 찼습니다."
+}
+```
+
+### 동시성 제어 흐름
+
+```
+요청 → 큐 크기 체크 → 세마포어 획득 (대기) → TTS/임베딩 실행 → 세마포어 해제
+         ↓ 큐 가득참                  ↓ 타임아웃
+       즉시 거부                    에러 반환
+```
+
+**실제 예시:**
+
+```python
+# TTS 생성 시
+async with concurrency.acquire_tts(request_id):
+    # 세마포어 획득 - 최대 2개까지만 동시 실행
+    audio = model.generate_speech(text)
+    # 작업 완료 후 자동으로 세마포어 해제
+```
+
+### 에러 처리
+
+**큐 가득참:**
+```json
+{
+  "detail": "서버가 현재 많은 요청을 처리 중입니다. 잠시 후 다시 시도해주세요."
+}
+```
+
+**타임아웃:**
+```json
+{
+  "detail": "요청 대기 시간이 초과되었습니다. (타임아웃: 300초)"
 }
 ```
 
